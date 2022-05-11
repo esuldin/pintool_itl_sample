@@ -26,6 +26,41 @@ double viete_formula_probe(unsigned iter_num)
     return ret;
 }
 
+RTN get_inner_rtn(const RTN& rtn, const std::string& name)
+{
+    if (!RTN_Valid(rtn)) {
+        TRACE("passed rtn is not valid");
+        return RTN_Invalid();
+    }
+
+    RTN_Open(rtn);
+    INS ins = RTN_InsHead(rtn);
+
+    if (INS_Valid(ins)) {
+        if (!INS_HasFallThrough(ins)) {
+            if (INS_IsDirectBranch(ins)) {
+                const ADDRINT rip = INS_NextAddress(ins);
+
+                xed_decoded_inst_t* xedd = INS_XedDec(ins);
+                const int jmp_displacement = xed_decoded_inst_get_branch_displacement(xedd);
+
+                RTN_Close(rtn);
+
+                return RTN_CreateAt(rip + jmp_displacement, name);
+            } else {
+                TRACE("first instruction is not direct jmp");
+            }
+        } else {
+            TRACE("first instruction is not uncoditional jmp or call");
+        }
+    } else {
+        TRACE("cannot get first instruction for rtn");
+    }
+
+    RTN_Close(rtn);
+    return RTN_Invalid();
+}
+
 template<typename FuncType>
 FuncType set_probe(const IMG& img, const char* funcname, FuncType probe)
 {
@@ -33,10 +68,18 @@ FuncType set_probe(const IMG& img, const char* funcname, FuncType probe)
     RTN rtn = RTN_FindByName(img, funcname);
 
     if (RTN_Valid(rtn)) {
-        if (RTN_IsSafeForProbedReplacement(rtn)) {
+        RTN outter_rtn = RTN_Invalid();
+        while (RTN_Valid(rtn) && !RTN_IsSafeForProbedReplacement(rtn) && outter_rtn != rtn) {
+            TRACE("given rtn cannot be probed, try to find inner rtn");
+
+            outter_rtn = rtn;
+            rtn = get_inner_rtn(outter_rtn, funcname);
+        }
+
+        if (RTN_Valid(rtn) && RTN_IsSafeForProbedReplacement(rtn)) {
             orig_func = reinterpret_cast<FuncType>(RTN_ReplaceProbed(rtn, reinterpret_cast<AFUNPTR>(probe)));
         } else {
-            TRACE("found rtn cannot be replaced");
+            TRACE("found rtn cannot be replaced and inner rtn cannot be obtained");
         }
     } else {
         TRACE("function " << funcname << " is not found");
